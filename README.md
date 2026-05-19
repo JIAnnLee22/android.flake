@@ -83,14 +83,42 @@ nix registry add androidShell github:JIAnnLee22/androidShell
 
 ### 方式三：在别的 flake 里作为 input
 
+如果你已经在维护自己的 flake（比如 NixOS 系统 flake），把 `androidShell` 加进
+`inputs`，再把它的 `devShells` 透传到自己的 outputs，就能用同样的命令进开发环境。
+
 ```nix
 {
-  inputs.androidShell.url = "github:JIAnnLee22/androidShell";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    androidShell.url = "github:JIAnnLee22/androidShell";
+  };
 
-  outputs = { androidShell, ... }: {
-    # androidShell.devShells.x86_64-linux.jdk17
+  outputs = { self, nixpkgs, androidShell, ... }: {
+    # 直接透传
+    devShells = androidShell.devShells;
+
+    # 或者和自己原有的 devShells 合并：
+    # devShells.x86_64-linux = androidShell.devShells.x86_64-linux // {
+    #   myShell = ...;
+    # };
+
+    # 其它 outputs（nixosConfigurations 等）照旧
   };
 }
+```
+
+之后在**你自己 flake 的目录**或通过路径：
+
+```bash
+nix develop                # 默认 = jdk17
+nix develop .#jdk11
+nix develop /etc/nixos#jdk17     # 假设你的系统 flake 在这
+```
+
+好处是 `androidShell` 的版本会被锁进**你自己的 `flake.lock`**，升级用：
+
+```bash
+nix flake update androidShell
 ```
 
 ### 方式四：本地路径
