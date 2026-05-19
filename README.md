@@ -3,13 +3,18 @@
 为安卓开发提供的 Nix flake，按 JDK 版本拆分 dev shell，每个 shell 自带一份**配置隔离**的
 Android Studio，并把当前 shell 的 JDK 自动注册到 IDE 的 JDK 列表里供 Gradle 选择。
 
+每个 dev shell 都跑在 [`buildFHSEnv`](https://nixos.org/manual/nixpkgs/stable/#sec-fhs-environments)
+用户态沙箱里，`/lib64/ld-linux-x86-64.so.2` 等 FHS 路径都存在，所以 Gradle 从 Maven 拉的
+`aapt2`、`sdkmanager` 等预编译二进制无需 patchelf 直接能跑。
+
 ## 包含
 
-- **Android Studio 2025.2.3.9**（pin 在 `android-studio.nix`，仅 IDE，不含 SDK/NDK；使用自带 JBR 启动）
+- **Android Studio 2025.2.3.9**（pin 在 `android-studio.nix`，可覆写，详见下文）
 - **JDK 11 / JDK 17**（按 profile 切换）
 - **android-tools**（`adb`、`fastboot` 等）
 - **scrcpy**（设备投屏）
 - **tmux**（终端复用）
+- **FHS 库**（zlib / libstdc++ / ncurses / openssl 等，足够跑 aapt2、sdkmanager）
 
 ## Dev shells
 
@@ -132,20 +137,43 @@ nix.registry.androidShell.to = {
 
 未提交修改会有 `Git tree is dirty` 警告，但仍可用。
 
-## 文件
+## 覆写 Android Studio 版本
 
-- `flake.nix` — devShell 定义、JDK 注册、`as` 启动函数
-- `android-studio.nix` — pin 住 AS 2025.2.3.9（hash + URL）
-- `flake.lock` — nixpkgs 版本锁
+flake 暴露了 `lib.x86_64-linux.mkAndroidStudio` / `mkShells` 与
+`packages.x86_64-linux.android-studio`，消费者可以在自己的 flake 里换版本而不用改这边代码。
 
-## 升级 Android Studio
+```nix
+{
+  inputs.androidShell.url = "github:JIAnnLee22/androidShell";
 
-改 `android-studio.nix` 里的 `version` / `url` / `sha256Hash` 即可。`sha256Hash` 可以这样取：
+  outputs = { androidShell, ... }: {
+    devShells.x86_64-linux = androidShell.lib.x86_64-linux.mkShells {
+      androidStudio = androidShell.lib.x86_64-linux.mkAndroidStudio {
+        version    = "2025.3.4.6";
+        sha256Hash = "sha256-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=";
+        # url 默认按 version 拼成 edgedl.me.gvt1.com 链接，特殊渠道才需要传
+      };
+    };
+  };
+}
+```
+
+不传任何参数即沿用默认版（当前 2025.2.3.9）。
+
+`sha256Hash` 取法：
 
 ```bash
 nix-prefetch-url https://edgedl.me.gvt1.com/android/studio/ide-zips/<ver>/android-studio-<ver>-linux.tar.gz
 nix hash to-sri --type sha256 <上面输出的 hash>
 ```
+
+或者偷懒法：先填一个全 A 的假 hash 触发构建，nix 会在错误里打印真实 hash，复制过去即可。
+
+## 文件
+
+- `flake.nix` — devShell 定义、`buildFHSEnv` 沙箱、JDK 注册、`as` 启动函数、`lib` 覆写入口
+- `android-studio.nix` — 可参数化的 AS 包装（默认 2025.2.3.9）
+- `flake.lock` — nixpkgs 版本锁
 
 ## 常见操作
 
