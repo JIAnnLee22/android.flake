@@ -115,6 +115,7 @@
             cat > "$ANDROID_STUDIO_PROPERTIES" <<EOF
             idea.config.path=$ANDROID_STUDIO_HOME/config
             idea.system.path=$ANDROID_STUDIO_HOME/system
+            disable.android.first.run=true
             EOF
 
             cp -f ${studioJdkTable} "$ANDROID_STUDIO_HOME/config/options/jdk.table.xml"
