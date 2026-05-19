@@ -106,8 +106,11 @@
             export JAVA_HOME=${jdk.home}
             export ANDROID_STUDIO_HOME="$HOME/.android-studio-${name}"
             export ANDROID_STUDIO_PROPERTIES="$ANDROID_STUDIO_HOME/idea.properties"
+            : "''${ANDROID_HOME:=$HOME/Android/Sdk}"
+            export ANDROID_HOME
+            export ANDROID_SDK_ROOT="$ANDROID_HOME"
 
-            mkdir -p "$ANDROID_STUDIO_HOME/config/options" "$ANDROID_STUDIO_HOME/system"
+            mkdir -p "$ANDROID_STUDIO_HOME/config/options" "$ANDROID_STUDIO_HOME/system" "$ANDROID_HOME"
 
             cat > "$ANDROID_STUDIO_PROPERTIES" <<EOF
             idea.config.path=$ANDROID_STUDIO_HOME/config
@@ -116,9 +119,19 @@
 
             cp -f ${studioJdkTable} "$ANDROID_STUDIO_HOME/config/options/jdk.table.xml"
 
+            cat > "$ANDROID_STUDIO_HOME/config/options/android.sdk.path.xml" <<EOF
+            <application>
+              <component name="AndroidSdkPathStore">
+                <option name="androidSdkAbsolutePath" value="$ANDROID_HOME" />
+              </component>
+            </application>
+            EOF
+
             as() {
               env -u JAVA_HOME \
                 STUDIO_PROPERTIES="$ANDROID_STUDIO_PROPERTIES" \
+                ANDROID_HOME="$ANDROID_HOME" \
+                ANDROID_SDK_ROOT="$ANDROID_HOME" \
                 XDG_CACHE_HOME="$ANDROID_STUDIO_HOME/cache" \
                 ${studioBin} "$@" \
                 >> "$ANDROID_STUDIO_HOME/studio.launch.log" 2>&1 &
@@ -130,6 +143,7 @@
             echo "========================================"
             echo " Android Dev Shell (${name})"
             echo " Shell JDK   : $JAVA_HOME"
+            echo " Android SDK : $ANDROID_HOME"
             echo " Studio JDK  : ${label} (pick in Settings -> Gradle JDK)"
             echo " Studio IDE  : ${androidStudio.version} (bundled JBR, FHS sandbox)"
             echo " Studio dir  : $ANDROID_STUDIO_HOME"
@@ -138,6 +152,7 @@
             echo ""
             echo "  as                     -> Android Studio in background"
             echo "  tmux new -s as-${name}  -> persistent shell (detach: Ctrl-b d)"
+            echo "  Override SDK location: ANDROID_HOME=/path/to/sdk nix develop ..."
           '';
 
           runScript = "bash";
