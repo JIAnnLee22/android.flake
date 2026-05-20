@@ -81,6 +81,11 @@
           name = "android-shell-${name}";
 
           targetPkgs = p: with p; [
+            # 完整版 bash（带 readline / progcomp），覆盖 FHS 默认的 bash-minimal，
+            # 否则 ~/.bashrc 里的 `shopt -s progcomp` / `bind` / PS1 转义会全部出错。
+            bashInteractive
+            bash-completion
+
             jdk
             android-tools
             androidStudio
