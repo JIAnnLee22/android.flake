@@ -76,6 +76,45 @@
           studioJdkTable = mkStudioJdkTable { inherit jdk name; };
           studioBin = "${androidStudio}/bin/android-studio";
           label = "nix-${name}";
+
+          # AS 内置 Terminal 默认会走 $SHELL，宿主 bash 加载 ~/.bashrc 会把
+          # dev shell 注入的 PATH / JAVA_HOME / ANDROID_HOME 改没。这里用一个
+          # 自定义 rcfile：先 source 用户原本的 ~/.bashrc，再覆盖关键变量，让
+          # adb / sdkmanager / gradle 一直可用。
+          asTerminalRc = pkgs.writeText "as-terminal-${name}-rcfile" ''
+            [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
+            export JAVA_HOME=${jdk.home}
+            export ANDROID_HOME="''${ANDROID_HOME:-$HOME/Android/Sdk}"
+            export ANDROID_SDK_ROOT="$ANDROID_HOME"
+            case ":$PATH:" in
+              *:/usr/bin:*) ;;
+              *) export PATH="/usr/local/bin:/usr/bin:/bin:$PATH" ;;
+            esac
+          '';
+
+          asTerminalShell = pkgs.writeShellScript "as-terminal-${name}" ''
+            exec ${pkgs.bashInteractive}/bin/bash --rcfile ${asTerminalRc} -i "$@"
+          '';
+
+          # AS 2025+ 的终端 shellPath 存在 terminal-local.xml 里
+          # (TerminalLocalOptions, RoamingType.LOCAL)。
+          asTerminalLocalXml = pkgs.writeText "as-${name}-terminal-local.xml" ''
+            <application>
+              <component name="TerminalLocalOptions">
+                <option name="shellPath" value="${asTerminalShell}" />
+              </component>
+            </application>
+          '';
+
+          # 旧版 AS 用 terminal.xml + TerminalOptionsProvider/myShellPath；
+          # 同时写一份兜底，新版会忽略，旧版能识别。
+          asTerminalXml = pkgs.writeText "as-${name}-terminal.xml" ''
+            <application>
+              <component name="TerminalOptionsProvider">
+                <option name="myShellPath" value="${asTerminalShell}" />
+              </component>
+            </application>
+          '';
         in
         (pkgs.buildFHSEnv {
           name = "android-shell-${name}";
@@ -124,6 +163,8 @@
             EOF
 
             cp -f ${studioJdkTable} "$ANDROID_STUDIO_HOME/config/options/jdk.table.xml"
+            cp -f ${asTerminalLocalXml} "$ANDROID_STUDIO_HOME/config/options/terminal-local.xml"
+            cp -f ${asTerminalXml} "$ANDROID_STUDIO_HOME/config/options/terminal.xml"
 
             cat > "$ANDROID_STUDIO_HOME/config/options/android.sdk.path.xml" <<EOF
             <application>
