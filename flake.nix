@@ -1,5 +1,5 @@
 {
-  description = "Android dev shells (JDK 11/17 profiles, pinned AS + scrcpy, FHS sandbox)";
+  description = "Android Studio launcher (FHS sandbox, JDK 11 + JDK 17 both registered)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -26,22 +26,25 @@
 
       defaultAndroidStudio = mkAndroidStudio { };
 
-      # jdk.table.xml seed so AS picks up the shell's JDK.
-      mkStudioJdkTable = { jdk, name }:
+      jdkLabel = jdk: "nix-jdk${lib.versions.major jdk.version}";
+
+      # jdk.table.xml seed registering all provided JDKs as
+      # `nix-jdk11`, `nix-jdk17`, ... so the user can pick either one
+      # in Settings -> Build Tools -> Gradle -> Gradle JDK.
+      mkStudioJdkTable = { jdks }:
         let
-          home = jdk.home;
-          label = "nix-${name}";
-          jrt = module: ''<root url="jrt://${home}/!/${module}" type="simple" />'';
-          javaVersion = lib.versions.major jdk.version;
-        in
-        pkgs.writeText "as-${name}-jdk.table.xml" ''
-          <?xml version="1.0" encoding="UTF-8"?>
-          <application>
-            <component name="ProjectJdkTable">
+          jdkEntry = jdk:
+            let
+              home = jdk.home;
+              major = lib.versions.major jdk.version;
+              label = jdkLabel jdk;
+              jrt = module: ''<root url="jrt://${home}/!/${module}" type="simple" />'';
+            in
+            ''
               <jdk version="2">
                 <name value="${label}" />
                 <type value="JavaSDK" />
-                <version value="${javaVersion}" />
+                <version value="${major}" />
                 <homePath value="${home}" />
                 <roots>
                   <annotationsPath>
@@ -62,28 +65,38 @@
                   </sourcePath>
                 </roots>
               </jdk>
+            '';
+        in
+        pkgs.writeText "as-jdk.table.xml" ''
+          <?xml version="1.0" encoding="UTF-8"?>
+          <application>
+            <component name="ProjectJdkTable">
+              ${lib.concatMapStrings jdkEntry jdks}
             </component>
           </application>
         '';
 
-      profiles = {
-        jdk11 = { jdk = pkgs.jdk11; };
-        jdk17 = { jdk = pkgs.jdk17; };
-      };
-
-      mkShell = { jdk, name, androidStudio ? defaultAndroidStudio }:
+      mkLauncher =
+        { name ? "as"
+        , defaultJdk ? pkgs.jdk17
+        , extraJdks ? [ pkgs.jdk11 ]
+        , androidStudio ? defaultAndroidStudio
+        }:
         let
-          studioJdkTable = mkStudioJdkTable { inherit jdk name; };
+          allJdks = [ defaultJdk ] ++ extraJdks;
+          studioJdkTable = mkStudioJdkTable { jdks = allJdks; };
           studioBin = "${androidStudio}/bin/android-studio";
-          label = "nix-${name}";
+
+          allLabels = lib.concatMapStringsSep ", " jdkLabel allJdks;
+          defaultLabel = jdkLabel defaultJdk;
 
           # AS 内置 Terminal 默认会走 $SHELL，宿主 bash 加载 ~/.bashrc 会把
-          # dev shell 注入的 PATH / JAVA_HOME / ANDROID_HOME 改没。这里用一个
+          # 启动器注入的 PATH / JAVA_HOME / ANDROID_HOME 改没。这里用一个
           # 自定义 rcfile：先 source 用户原本的 ~/.bashrc，再覆盖关键变量，让
           # adb / sdkmanager / gradle 一直可用。
-          asTerminalRc = pkgs.writeText "as-terminal-${name}-rcfile" ''
+          asTerminalRc = pkgs.writeText "as-terminal-rcfile" ''
             [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
-            export JAVA_HOME=${jdk.home}
+            export JAVA_HOME=${defaultJdk.home}
             export ANDROID_HOME="''${ANDROID_HOME:-$HOME/Android/Sdk}"
             export ANDROID_SDK_ROOT="$ANDROID_HOME"
             case ":$PATH:" in
@@ -92,13 +105,13 @@
             esac
           '';
 
-          asTerminalShell = pkgs.writeShellScript "as-terminal-${name}" ''
+          asTerminalShell = pkgs.writeShellScript "as-terminal" ''
             exec ${pkgs.bashInteractive}/bin/bash --rcfile ${asTerminalRc} -i "$@"
           '';
 
           # AS 2025+ 的终端 shellPath 存在 terminal-local.xml 里
           # (TerminalLocalOptions, RoamingType.LOCAL)。
-          asTerminalLocalXml = pkgs.writeText "as-${name}-terminal-local.xml" ''
+          asTerminalLocalXml = pkgs.writeText "as-terminal-local.xml" ''
             <application>
               <component name="TerminalLocalOptions">
                 <option name="shellPath" value="${asTerminalShell}" />
@@ -108,53 +121,26 @@
 
           # 旧版 AS 用 terminal.xml + TerminalOptionsProvider/myShellPath；
           # 同时写一份兜底，新版会忽略，旧版能识别。
-          asTerminalXml = pkgs.writeText "as-${name}-terminal.xml" ''
+          asTerminalXml = pkgs.writeText "as-terminal.xml" ''
             <application>
               <component name="TerminalOptionsProvider">
                 <option name="myShellPath" value="${asTerminalShell}" />
               </component>
             </application>
           '';
-        in
-        (pkgs.buildFHSEnv {
-          name = "android-shell-${name}";
 
-          targetPkgs = p: with p; [
-            # 完整版 bash（带 readline / progcomp），覆盖 FHS 默认的 bash-minimal，
-            # 否则 ~/.bashrc 里的 `shopt -s progcomp` / `bind` / PS1 转义会全部出错。
-            bashInteractive
-            bash-completion
-
-            jdk
-            android-tools
-            androidStudio
-            scrcpy
-            tmux
-
-            # AAPT2 / sdkmanager / 命令行工具的基础库
-            zlib
-            stdenv.cc.cc.lib
-            ncurses5
-            bzip2
-            libxml2
-            openssl
-
-            # 需要 emulator / layoutlib 预览时再打开这些：
-            # libpulseaudio alsa-lib libGL fontconfig freetype
-            # xorg.libX11 xorg.libXext xorg.libXrender
-            # xorg.libXi xorg.libXrandr xorg.libXcursor xorg.libXtst
-            # xorg.libXxf86vm xorg.libxcb
-          ];
-
-          profile = ''
-            export JAVA_HOME=${jdk.home}
-            export ANDROID_STUDIO_HOME="$HOME/.android-studio-${name}"
+          launchScript = pkgs.writeShellScript "${name}-launch" ''
+            set -eu
+            export JAVA_HOME=${defaultJdk.home}
+            export ANDROID_STUDIO_HOME="$HOME/.android-studio"
             export ANDROID_STUDIO_PROPERTIES="$ANDROID_STUDIO_HOME/idea.properties"
             : "''${ANDROID_HOME:=$HOME/Android/Sdk}"
             export ANDROID_HOME
             export ANDROID_SDK_ROOT="$ANDROID_HOME"
 
-            mkdir -p "$ANDROID_STUDIO_HOME/config/options" "$ANDROID_STUDIO_HOME/system" "$ANDROID_HOME"
+            mkdir -p "$ANDROID_STUDIO_HOME/config/options" \
+                     "$ANDROID_STUDIO_HOME/system" \
+                     "$ANDROID_HOME"
 
             cat > "$ANDROID_STUDIO_PROPERTIES" <<EOF
             idea.config.path=$ANDROID_STUDIO_HOME/config
@@ -162,9 +148,9 @@
             disable.android.first.run=true
             EOF
 
-            cp -f ${studioJdkTable} "$ANDROID_STUDIO_HOME/config/options/jdk.table.xml"
+            cp -f ${studioJdkTable}     "$ANDROID_STUDIO_HOME/config/options/jdk.table.xml"
             cp -f ${asTerminalLocalXml} "$ANDROID_STUDIO_HOME/config/options/terminal-local.xml"
-            cp -f ${asTerminalXml} "$ANDROID_STUDIO_HOME/config/options/terminal.xml"
+            cp -f ${asTerminalXml}      "$ANDROID_STUDIO_HOME/config/options/terminal.xml"
 
             cat > "$ANDROID_STUDIO_HOME/config/options/android.sdk.path.xml" <<EOF
             <application>
@@ -174,53 +160,100 @@
             </application>
             EOF
 
-            as() {
-              env -u JAVA_HOME \
-                STUDIO_PROPERTIES="$ANDROID_STUDIO_PROPERTIES" \
-                ANDROID_HOME="$ANDROID_HOME" \
-                ANDROID_SDK_ROOT="$ANDROID_HOME" \
-                XDG_CACHE_HOME="$ANDROID_STUDIO_HOME/cache" \
-                ${studioBin} "$@" \
-                >> "$ANDROID_STUDIO_HOME/studio.launch.log" 2>&1 &
-              disown
-              echo "Android Studio started in background (log: $ANDROID_STUDIO_HOME/studio.launch.log)"
-            }
-            export -f as
+            echo "Launching Android Studio"
+            echo "  Default JDK : $JAVA_HOME (${defaultLabel})"
+            echo "  IDE JDKs    : ${allLabels} (Settings -> Gradle JDK)"
+            echo "  Studio IDE  : ${androidStudio.version}"
+            echo "  Studio dir  : $ANDROID_STUDIO_HOME"
+            echo "  Android SDK : $ANDROID_HOME"
 
-            echo "========================================"
-            echo " Android Dev Shell (${name})"
-            echo " Shell JDK   : $JAVA_HOME"
-            echo " Android SDK : $ANDROID_HOME"
-            echo " Studio JDK  : ${label} (pick in Settings -> Gradle JDK)"
-            echo " Studio IDE  : ${androidStudio.version} (bundled JBR, FHS sandbox)"
-            echo " Studio dir  : $ANDROID_STUDIO_HOME"
-            echo " Tools       : adb, scrcpy, tmux"
-            echo "========================================"
-            echo ""
-            echo "  as                     -> Android Studio in background"
-            echo "  tmux new -s as-${name}  -> persistent shell (detach: Ctrl-b d)"
-            echo "  Override SDK location: ANDROID_HOME=/path/to/sdk nix develop ..."
+            exec env -u JAVA_HOME \
+              STUDIO_PROPERTIES="$ANDROID_STUDIO_PROPERTIES" \
+              ANDROID_HOME="$ANDROID_HOME" \
+              ANDROID_SDK_ROOT="$ANDROID_HOME" \
+              XDG_CACHE_HOME="$ANDROID_STUDIO_HOME/cache" \
+              ${studioBin} "$@"
           '';
 
-          runScript = "bash";
-        }).env;
+          fhsEnv = pkgs.buildFHSEnv {
+            inherit name;
 
-      # Build all shells, optionally with an overridden AS.
-      mkShells = { androidStudio ? defaultAndroidStudio }:
-        let
-          shells = builtins.mapAttrs
-            (name: { jdk }: mkShell { inherit jdk name androidStudio; })
-            profiles;
+            # 只把 defaultJdk 放进 FHS 的 /usr，避免 jdk11/jdk17 的
+            # `bin/javac` 互相覆盖。其他 JDK 通过绝对 store 路径写进
+            # jdk.table.xml，IDE 直接按路径读，照样能用。
+            targetPkgs = p: with p; [
+              # 完整版 bash（带 readline / progcomp），覆盖 FHS 默认的 bash-minimal，
+              # 否则 AS 内置 Terminal 加载 ~/.bashrc 时 `shopt -s progcomp` / `bind`
+              # / PS1 转义会全部出错。
+              bashInteractive
+              bash-completion
+
+              defaultJdk
+              android-tools
+              androidStudio
+
+              # AAPT2 / sdkmanager / 命令行工具的基础库
+              zlib
+              stdenv.cc.cc.lib
+              ncurses5
+              bzip2
+              libxml2
+              openssl
+
+              # 需要 emulator / layoutlib 预览时再打开这些：
+              # libpulseaudio alsa-lib libGL fontconfig freetype
+              # xorg.libX11 xorg.libXext xorg.libXrender
+              # xorg.libXi xorg.libXrandr xorg.libXcursor xorg.libXtst
+              # xorg.libXxf86vm xorg.libxcb
+            ];
+
+            runScript = "${launchScript}";
+          };
+
+          desktopItem = pkgs.makeDesktopItem {
+            inherit name;
+            desktopName = "Android Studio";
+            genericName = "Android IDE";
+            comment = "Android Studio (FHS) with ${allLabels} registered";
+            # 用 FHS env 的绝对路径作为 Exec，desktop 文件不依赖
+            # `${name}` 被加进 PATH。
+            exec = "${fhsEnv}/bin/${name} %U";
+            icon = "${androidStudio}/share/pixmaps/android-studio.png";
+            categories = [ "Development" "IDE" ];
+            startupWMClass = "jetbrains-studio";
+            startupNotify = true;
+          };
         in
-        shells // { default = shells.jdk17; };
+        pkgs.symlinkJoin {
+          inherit name;
+          paths = [ fhsEnv desktopItem ];
+          meta = {
+            description = "Android Studio launcher (JDKs: ${allLabels})";
+            mainProgram = name;
+            platforms = [ system ];
+          };
+        };
 
+      launcher = mkLauncher { };
+
+      mkApp = drv: {
+        type = "app";
+        program = "${drv}/bin/${drv.meta.mainProgram or drv.name}";
+      };
     in {
-      devShells.${system} = mkShells { };
+      packages.${system} = {
+        as = launcher;
+        default = launcher;
+        android-studio = defaultAndroidStudio;
+      };
 
-      packages.${system}.android-studio = defaultAndroidStudio;
+      apps.${system} = {
+        as = mkApp launcher;
+        default = mkApp launcher;
+      };
 
       lib.${system} = {
-        inherit mkAndroidStudio mkShell mkShells;
+        inherit mkAndroidStudio mkLauncher mkStudioJdkTable;
       };
     };
 }
