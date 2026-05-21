@@ -236,6 +236,53 @@
 
       launcher = mkLauncher { };
 
+      # 命令行 dev shell：FHS 沙箱 + 单一 JDK + android-tools，
+      # 不带 IDE。给 `nix develop .#androidShellNN` 用。
+      mkAndroidShell = { name, jdk }:
+        let
+          label = "nix-jdk${lib.versions.major jdk.version}";
+        in
+        (pkgs.buildFHSEnv {
+          inherit name;
+
+          targetPkgs = p: with p; [
+            bashInteractive
+            bash-completion
+
+            jdk
+            android-tools
+
+            zlib
+            stdenv.cc.cc.lib
+            ncurses5
+            bzip2
+            libxml2
+            openssl
+          ];
+
+          profile = ''
+            export JAVA_HOME=${jdk.home}
+            : "''${ANDROID_HOME:=$HOME/Android/Sdk}"
+            export ANDROID_HOME
+            export ANDROID_SDK_ROOT="$ANDROID_HOME"
+            mkdir -p "$ANDROID_HOME"
+
+            echo "========================================"
+            echo " ${name} (${label})"
+            echo " JAVA_HOME   : $JAVA_HOME"
+            echo " ANDROID_HOME: $ANDROID_HOME"
+            echo " Tools ready : adb / gradle / aapt2 (FHS sandbox)"
+            echo "========================================"
+          '';
+
+          runScript = "bash";
+        }).env;
+
+      shells = {
+        androidShell11 = mkAndroidShell { name = "androidShell11"; jdk = pkgs.jdk11; };
+        androidShell17 = mkAndroidShell { name = "androidShell17"; jdk = pkgs.jdk17; };
+      };
+
       mkApp = drv: {
         type = "app";
         program = "${drv}/bin/${drv.meta.mainProgram or drv.name}";
@@ -252,8 +299,12 @@
         default = mkApp launcher;
       };
 
+      devShells.${system} = shells // {
+        default = shells.androidShell17;
+      };
+
       lib.${system} = {
-        inherit mkAndroidStudio mkLauncher mkStudioJdkTable;
+        inherit mkAndroidStudio mkLauncher mkStudioJdkTable mkAndroidShell;
       };
     };
 }
