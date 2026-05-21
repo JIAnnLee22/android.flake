@@ -236,13 +236,15 @@
 
       launcher = mkLauncher { };
 
-      # 命令行 dev shell：FHS 沙箱 + 单一 JDK + android-tools，
-      # 不带 IDE。给 `nix develop .#androidShellNN` 用。
+      # 命令行环境：FHS 沙箱 + 单一 JDK + android-tools，不带 IDE。
+      # 返回的是底层 buildFHSEnv 包本身（含 `bin/<name>` 可执行文件），
+      # 既可以装进 systemPackages 直接当命令用，也可以通过 `.env`
+      # 暴露成 devShell（`nix develop`）。
       mkAndroidShell = { name, jdk }:
         let
           label = "nix-jdk${lib.versions.major jdk.version}";
         in
-        (pkgs.buildFHSEnv {
+        pkgs.buildFHSEnv {
           inherit name;
 
           targetPkgs = p: with p; [
@@ -276,7 +278,13 @@
           '';
 
           runScript = "bash";
-        }).env;
+
+          meta = {
+            description = "Android CLI shell (${label}) in FHS sandbox";
+            mainProgram = name;
+            platforms = [ system ];
+          };
+        };
 
       shells = {
         androidShell11 = mkAndroidShell { name = "androidShell11"; jdk = pkgs.jdk11; };
@@ -292,15 +300,15 @@
         as = launcher;
         default = launcher;
         android-studio = defaultAndroidStudio;
-      };
+      } // shells;
 
       apps.${system} = {
         as = mkApp launcher;
         default = mkApp launcher;
-      };
+      } // (lib.mapAttrs (_: mkApp) shells);
 
-      devShells.${system} = shells // {
-        default = shells.androidShell17;
+      devShells.${system} = (lib.mapAttrs (_: drv: drv.env) shells) // {
+        default = shells.androidShell17.env;
       };
 
       lib.${system} = {

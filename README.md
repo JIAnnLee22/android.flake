@@ -43,8 +43,17 @@
 ### 临时启动（不安装）
 
 ```bash
-nix run /path/to/androidShell                       # = .#as
-nix run /path/to/androidShell &> /tmp/as.log & disown   # 后台
+# GUI Android Studio
+nix run /path/to/androidShell                                     # = .#as
+nix run /path/to/androidShell &> /tmp/as.log & disown             # 后台
+
+# 进 CLI 沙箱
+nix run /path/to/androidShell#androidShell11
+nix run /path/to/androidShell#androidShell17
+
+# 或者用 devShell 形式（带 PS1 / PATH 集成）
+nix develop /path/to/androidShell#androidShell11
+nix develop /path/to/androidShell#androidShell17
 ```
 
 可以临时换 SDK 路径：
@@ -53,17 +62,27 @@ nix run /path/to/androidShell &> /tmp/as.log & disown   # 后台
 ANDROID_HOME=/path/to/sdk nix run /path/to/androidShell
 ```
 
-### 安装到 NixOS / home-manager（在 rofi 等启动器里直接用）
+### 安装到 NixOS / home-manager（在 rofi / 终端里直接用）
 
-launcher 包同时输出 `bin/as` 和 `share/applications/as.desktop`，装进系统 / 用户
-环境后，rofi、wofi、krunner、GNOME Activities 等都能搜到 **Android Studio**。
+三个包都暴露了 `bin/<名字>` 可执行文件：
+
+| 包 | 命令 | 用途 |
+|----|------|------|
+| `as` | `as` | 启动 GUI Android Studio（也注册 desktop entry） |
+| `androidShell11` | `androidShell11` | 进入 JDK 11 + android-tools 的 FHS 沙箱终端 |
+| `androidShell17` | `androidShell17` | 进入 JDK 17 + android-tools 的 FHS 沙箱终端 |
+
+GUI 包另外输出 `share/applications/as.desktop`，装进系统 / 用户环境后
+rofi、wofi、krunner、GNOME Activities 等都能搜到 **Android Studio**。
 
 NixOS（`configuration.nix`）：
 
 ```nix
 { inputs, pkgs, ... }: {
-  environment.systemPackages = [
-    inputs.androidShell.packages.${pkgs.system}.as
+  environment.systemPackages = with inputs.androidShell.packages.${pkgs.system}; [
+    as              # rofi 里搜 "Android Studio"
+    androidShell11  # 终端命令
+    androidShell17  # 终端命令
   ];
 }
 ```
@@ -72,10 +91,23 @@ home-manager（`home.nix`）：
 
 ```nix
 { inputs, pkgs, ... }: {
-  home.packages = [
-    inputs.androidShell.packages.${pkgs.system}.as
+  home.packages = with inputs.androidShell.packages.${pkgs.system}; [
+    as
+    androidShell11
+    androidShell17
   ];
 }
+```
+
+装好之后：
+
+```bash
+androidShell17     # 直接进 JDK 17 沙箱
+$ java -version    # OpenJDK 17
+$ adb devices
+$ exit             # 退回宿主 shell
+
+androidShell11     # JDK 11 沙箱（同理）
 ```
 
 Desktop entry 用的 `Exec` 是 launcher 的绝对 Nix store 路径，所以不依赖
