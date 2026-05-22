@@ -21,7 +21,10 @@
 - **Android Studio 2025.2.3.9**（pin 在 `android-studio.nix`，可覆写，详见下文）
 - **JDK 11 & JDK 17**（都注册进 IDE，CLI 默认走 JDK 17）
 - **android-tools**（`adb`、`fastboot` 等）
+- **git + openssh**（IDE / 内置 Terminal 的 VCS 推送；会读取 `~/.ssh/config` 里的 Host 规则）
 - **FHS 库**（zlib / libstdc++ / ncurses / openssl 等，足够跑 aapt2、sdkmanager）
+
+> **SSH 说明**：FHS 沙箱里 `/nix/store` 文件属主会变成 `nobody`，OpenSSH 无法直接跟随 Home Manager 的 `~/.ssh/config` 符号链接。启动时会复制到 `~/.cache/androidShell/ssh/config`，并通过 `GIT_SSH_COMMAND` / `ssh -F` 使用；从 rofi 启动时还会自动探测 `SSH_AUTH_SOCK`（systemd user `ssh-agent` 等）。
 
 ## 启动
 

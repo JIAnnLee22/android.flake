@@ -28,6 +28,34 @@
 
       jdkLabel = jdk: "nix-jdk${lib.versions.major jdk.version}";
 
+      # FHS/bwrap 里 /nix/store 文件属主会变成 nobody，OpenSSH 跟随 HM 的
+      # ~/.ssh/config 符号链接后会报 Bad owner。复制一份到用户 cache 再用 -F。
+      # Desktop / rofi 启动 AS 时还要补上 SSH_AUTH_SOCK。
+      sshEnvSetup = ''
+        if [ -z "''${SSH_AUTH_SOCK:-}" ]; then
+          for _ssh_sock in "/run/user/$(id -u)/keyring/ssh" \
+                           "/run/user/$(id -u)/gcr/ssh"; do
+            if [ -S "$_ssh_sock" ]; then
+              export SSH_AUTH_SOCK="$_ssh_sock"
+              break
+            fi
+          done
+        fi
+        unset _ssh_sock
+
+        if [ -e "$HOME/.ssh/config" ]; then
+          _as_ssh_config="$HOME/.cache/androidShell/ssh/config"
+          mkdir -p "$(dirname "$_as_ssh_config")"
+          cp -fL "$HOME/.ssh/config" "$_as_ssh_config" 2>/dev/null \
+            || cp -f "$HOME/.ssh/config" "$_as_ssh_config"
+          chmod 600 "$_as_ssh_config"
+          export GIT_SSH_COMMAND="ssh -F $_as_ssh_config"
+          export GIT_SSH="$GIT_SSH_COMMAND"
+          ssh() { command ssh -F "$_as_ssh_config" "$@"; }
+        fi
+        unset _as_ssh_config
+      '';
+
       # jdk.table.xml seed registering all provided JDKs as
       # `nix-jdk11`, `nix-jdk17`, ... so the user can pick either one
       # in Settings -> Build Tools -> Gradle -> Gradle JDK.
@@ -96,13 +124,11 @@
           # adb / sdkmanager / gradle 一直可用。
           asTerminalRc = pkgs.writeText "as-terminal-rcfile" ''
             [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
+            ${sshEnvSetup}
             export JAVA_HOME=${defaultJdk.home}
             export ANDROID_HOME="''${ANDROID_HOME:-$HOME/Android/Sdk}"
             export ANDROID_SDK_ROOT="$ANDROID_HOME"
-            case ":$PATH:" in
-              *:/usr/bin:*) ;;
-              *) export PATH="/usr/local/bin:/usr/bin:/bin:$PATH" ;;
-            esac
+            export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
           '';
 
           asTerminalShell = pkgs.writeShellScript "as-terminal" ''
@@ -167,11 +193,16 @@
             echo "  Studio dir  : $ANDROID_STUDIO_HOME"
             echo "  Android SDK : $ANDROID_HOME"
 
+            ${sshEnvSetup}
+
             exec env -u JAVA_HOME \
               STUDIO_PROPERTIES="$ANDROID_STUDIO_PROPERTIES" \
               ANDROID_HOME="$ANDROID_HOME" \
               ANDROID_SDK_ROOT="$ANDROID_HOME" \
               XDG_CACHE_HOME="$ANDROID_STUDIO_HOME/cache" \
+              ''${SSH_AUTH_SOCK:+SSH_AUTH_SOCK="$SSH_AUTH_SOCK"} \
+              ''${GIT_SSH_COMMAND:+GIT_SSH_COMMAND="$GIT_SSH_COMMAND"} \
+              ''${GIT_SSH:+GIT_SSH="$GIT_SSH"} \
               ${studioBin} "$@"
           '';
 
@@ -191,6 +222,8 @@
               defaultJdk
               android-tools
               androidStudio
+              git
+              openssh
 
               # AAPT2 / sdkmanager / 命令行工具的基础库
               zlib
@@ -253,6 +286,8 @@
 
             jdk
             android-tools
+            git
+            openssh
 
             zlib
             stdenv.cc.cc.lib
@@ -268,6 +303,7 @@
             export ANDROID_HOME
             export ANDROID_SDK_ROOT="$ANDROID_HOME"
             mkdir -p "$ANDROID_HOME"
+            ${sshEnvSetup}
 
             echo "========================================"
             echo " ${name} (${label})"
